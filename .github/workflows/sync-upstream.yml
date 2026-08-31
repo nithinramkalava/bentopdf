@@ -1,0 +1,70 @@
+# Save this file as: .github/workflows/sync-upstream.yml in your BentoPDF fork
+#
+# What it does differently from a plain branch-sync workflow:
+#   - Does NOT sync on every upstream commit (dependency bumps, translations,
+#     daily PDF-engine updates, etc. all happen between releases and would
+#     otherwise trigger a Vercel redeploy every few hours)
+#   - Instead, checks the GitHub Releases API for alam00000/bentopdf and only
+#     updates your fork when the latest release tag actually changes
+#   - Tracks the last-synced tag in a small text file committed to your fork,
+#     so re-runs are idempotent (no-op if nothing new was released)
+#   - Pushing the update triggers Vercel's existing auto-deploy on push to main
+
+name: Sync fork to latest BentoPDF release
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # checks 4x/day; cheap since it's just an API call
+  workflow_dispatch: {}       # manual trigger from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  sync-on-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest upstream release tag
+        id: latest
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/alam00000/bentopdf/releases/latest | jq -r .tag_name)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Read last-synced tag (if any)
+        id: current
+        run: |
+          if [ -f .upstream-version ]; then
+            echo "tag=$(cat .upstream-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare and sync if a new release exists
+        if: steps.latest.outputs.tag != steps.current.outputs.tag
+        run: |
+          echo "New release detected: ${{ steps.current.outputs.tag }} -> ${{ steps.latest.outputs.tag }}"
+
+          git remote add upstream https://github.com/alam00000/bentopdf.git || true
+          git fetch upstream --tags
+
+          git checkout main
+          git merge --ff-only "${{ steps.latest.outputs.tag }}"
+          # If this fails, your fork's main has diverged from upstream's
+          # tagged history (e.g. custom commits on main). Keep customizations
+          # on a separate branch instead, and point Vercel at that branch.
+
+          echo "${{ steps.latest.outputs.tag }}" > .upstream-version
+          git add .upstream-version
+          git commit -m "chore: sync to upstream release ${{ steps.latest.outputs.tag }}"
+
+          git push origin main
+
+      - name: No new release
+        if: steps.latest.outputs.tag == steps.current.outputs.tag
+        run: echo "Already on latest release (${{ steps.current.outputs.tag }}). Nothing to do."
