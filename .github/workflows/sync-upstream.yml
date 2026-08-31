@@ -50,6 +50,9 @@ jobs:
         run: |
           echo "New release detected: ${{ steps.current.outputs.tag }} -> ${{ steps.latest.outputs.tag }}"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git remote add upstream https://github.com/alam00000/bentopdf.git || true
           git fetch upstream --tags
 
